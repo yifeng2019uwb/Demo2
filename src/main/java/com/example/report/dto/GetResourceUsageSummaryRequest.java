@@ -7,6 +7,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
+import org.springframework.format.annotation.DateTimeFormat;
+
 /*
 **GET** `/api/v1/reports/summary?app_name=<name>&start=<date>&end=<date>`
  */
@@ -22,10 +24,12 @@ public record GetResourceUsageSummaryRequest (
     String appName,
 
     @NotNull
+    @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
     @JsonProperty("start")
     OffsetDateTime start,
-    
+
     @NotNull
+    @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
     @JsonProperty("end")
     OffsetDateTime end
 ) {
