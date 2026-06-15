@@ -81,6 +81,11 @@ public class ReportServiceImpl implements ReportService{
     Integer avg_memory_mb,
     Integer peak_memory_mb */
         log.atInfo().log("Retrieving resource usage summary for request: {}", request);
+        validateTimestamp(request.start());
+        validateTimestamp(request.end());
+        if (request.start().isAfter(request.end())) {
+            throw new ValidationException("Start timestamp cannot be after end timestamp");
+        }
         List<Report> reports = reportDao.findReportByContainerIdAndAppNameAndReportedAtBetween(request.containerId(), request.appName(), request.start(), request.end());
         log.atInfo().log("Found {} reports for container: {}", reports.size(), request.containerId());
         // Implementation for calculating resource usage summary
