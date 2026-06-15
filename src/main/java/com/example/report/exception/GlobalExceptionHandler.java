@@ -6,11 +6,10 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
-
-import com.example.report.service.ReportServiceImpl;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -36,6 +35,15 @@ public class GlobalExceptionHandler {
             .map(f -> f.getField() + ": " + f.getDefaultMessage())
             .collect(Collectors.joining(", "));
         log.atDebug().log("Validation failed: {}", msg);
+        return ResponseEntity.badRequest().body(Map.of("error", msg));
+    }
+
+    @ExceptionHandler(BindException.class)
+    public ResponseEntity<Map<String, String>> handleBind(BindException e) {
+        String msg = e.getBindingResult().getFieldErrors().stream()
+            .map(f -> f.getField() + ": " + f.getDefaultMessage())
+            .collect(Collectors.joining(", "));
+        log.atDebug().log("Bind failed: {}", msg);
         return ResponseEntity.badRequest().body(Map.of("error", msg));
     }
 }
