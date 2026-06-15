@@ -432,6 +432,42 @@ public class EventIT {
 java -ea Integration_test/EventIT.java
 ```
 
+### Python integration test (alternative)
+
+Place tests in `Integration-test/python/` as a standalone suite using `pytest` + `requests`:
+
+```
+Integration-test/python/
+  requirements.txt          # pytest, requests
+  test_live_deployment.py
+```
+
+**`requirements.txt`:**
+```
+pytest
+requests
+```
+
+**Makefile target** — creates a venv automatically (required on macOS/Homebrew Python due to PEP 668):
+```makefile
+integ-test-python:
+    cd Integration-test/python && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -q && .venv/bin/pytest test_live_deployment.py -v
+```
+
+Run against the live URL:
+```bash
+make integ-test-python
+
+# Override base URL:
+BASE_URL=https://your-app.ondigitalocean.app make integ-test-python
+```
+
+Add `.venv` to `.gitignore` so the virtual environment is not committed.
+
+> **Why not `pip install` directly?** macOS Homebrew Python enforces PEP 668 — system-wide pip installs are blocked. Always use a venv for project dependencies.
+
+---
+
 After a successful run, verify data persisted in PostgreSQL:
 ```bash
 psql "postgres://<user>:<password>@<host>:<port>/<db>?sslmode=require"

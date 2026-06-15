@@ -5,6 +5,7 @@ import java.time.LocalDateTime;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 
 /*
 **GET** `/api/v1/reports/summary?app_name=<name>&start=<date>&end=<date>`
@@ -20,11 +21,11 @@ public record GetResourceUsageSummaryRequest (
     @JsonProperty("app_name")
     String appName,
 
-    @NotBlank
+    @NotNull
     @JsonProperty("start")
     LocalDateTime start,
     
-    @NotBlank
+    @NotNull
     @JsonProperty("end")
     LocalDateTime end
 ) {
