@@ -2,8 +2,12 @@ package com.example.report.service;
 
 import java.time.OffsetDateTime;
 import java.util.Optional;
+import java.util.PriorityQueue;
 import java.util.UUID;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -73,13 +77,6 @@ public class ReportServiceImpl implements ReportService{
 
     @Override
     public GetResourceUsageSummaryResponse getResourceUsageSummary(GetResourceUsageSummaryRequest request) {
-        // TODO Auto-generated method stub
-        /*    String app_name,
-    Integer total_reports,
-    Double avg_cpu_percent,
-    Double peak_cpu_percent,
-    Integer avg_memory_mb,
-    Integer peak_memory_mb */
         log.atInfo().log("Retrieving resource usage summary for request: {}", request);
         validateTimestamp(request.start());
         validateTimestamp(request.end());
@@ -102,22 +99,10 @@ public class ReportServiceImpl implements ReportService{
 
     @Override
     public GetTopConsumersResponse getTopConsumers(GetTopConsumersRequest request) {
-        // TODO Auto-generated method stub
         log.atInfo().log("Retrieving top consumers for request: {}", request);
         List<Report> reports = reportDao.findAll();
         log.atInfo().log("Found {} reports", reports.size());
-        /*
-        {
-  "results": [
-    { "container_id": "worker-3", "avg_cpu_percent": 91.2 },
-    { "container_id": "web-1",    "avg_cpu_percent": 72.5 }
-  ]
-} */
-        return new GetTopConsumersResponse(
-            List.of()
-        );
-
-
+        return new GetTopConsumersResponse(findTopByAvgCpu(reports, request.limit()));
     }
 
     private void validateTimestamp(OffsetDateTime timestamp) {
@@ -129,6 +114,33 @@ public class ReportServiceImpl implements ReportService{
         }
     }
 
+    private List<GetTopConsumersResponse.ContainerUsage> findTopByAvgCpu(List<Report> reports, int limit) {
+        if (reports.isEmpty()) {
+            return List.of();
+        }
 
+        Map<String, Double> cpuSum = new HashMap<>();
+        Map<String, Integer> count = new HashMap<>();
 
+        for (Report report : reports) {
+            String key = report.getContainerId();
+            cpuSum.merge(key, report.getCpuUsagePercent(), Double::sum);
+            count.merge(key, 1, Integer::sum);
+        }
+
+        // max-heap by avg CPU desc
+        PriorityQueue<String> pq = new PriorityQueue<>((a, b) -> Double.compare(
+            cpuSum.get(b) / count.get(b),
+            cpuSum.get(a) / count.get(a)
+        ));
+        pq.addAll(cpuSum.keySet());
+
+        List<GetTopConsumersResponse.ContainerUsage> result = new ArrayList<>();
+        for (int i = 0; i < limit && !pq.isEmpty(); i++) {
+            String containerId = pq.poll();
+            double avg = cpuSum.get(containerId) / count.get(containerId);
+            result.add(new GetTopConsumersResponse.ContainerUsage(containerId, avg));
+        }
+        return result;
+    }
 }

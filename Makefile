@@ -1,10 +1,10 @@
-.PHONY: build test clean run integ-test integ-test-python
+.PHONY: build test clean run integ-test integ-test-python coverage
 
 build:
 	./gradlew build -x test
 
 test:
-	./gradlew cleanTest test
+	./gradlew cleanTest test jacocoTestReport
 
 clean:
 	./gradlew clean

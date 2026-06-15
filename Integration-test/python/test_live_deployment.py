@@ -1,14 +1,14 @@
 import os
 import pytest
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 BASE_URL = os.getenv("BASE_URL", "https://report-app-88qqj.ondigitalocean.app")
 API = f"{BASE_URL}/api/v1/reports"
 
 
 def ts(delta_minutes=0):
-    return (datetime.now() - timedelta(minutes=delta_minutes)).replace(microsecond=0).isoformat()
+    return (datetime.now(timezone.utc) - timedelta(minutes=delta_minutes)).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 @pytest.fixture(scope="session")
@@ -46,7 +46,7 @@ def test_create_report_future_timestamp_returns_400():
         "app_name": "billing-service",
         "cpu_usage_percent": 50.0,
         "memory_usage_mb": 256,
-        "reported_at": (datetime.now() + timedelta(days=1)).isoformat(),
+        "reported_at": (datetime.now(timezone.utc) + timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ'),
     }
     r = requests.post(API, json=payload)
     assert r.status_code == 400
@@ -115,7 +115,7 @@ def test_summary_returns_200_with_aggregation_fields(created_report_id):
         "end": ts(0),
     }
     r = requests.get(f"{API}/summary", params=params)
-    assert r.status_code == 200
+    assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
     body = r.json()
     assert "total_reports" in body
     assert "avg_cpu_percent" in body
