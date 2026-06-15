@@ -17,6 +17,7 @@ import com.example.report.dto.GetResourceUsageSummaryRequest;
 import com.example.report.dto.GetResourceUsageSummaryResponse;
 import com.example.report.dto.GetTopConsumersRequest;
 import com.example.report.dto.GetTopConsumersResponse;
+import com.example.report.exception.NotFoundException;
 import com.example.report.exception.ValidationException;
 import com.example.report.model.Report;
 
@@ -66,7 +67,7 @@ public class ReportServiceImpl implements ReportService{
             );
         } else {
             log.atError().log("Report not found with ID: {}", reportId);
-            throw new ValidationException("Report not found with ID: " + reportId);
+            throw new NotFoundException("Report not found with ID: " + reportId);
         }
     }
 

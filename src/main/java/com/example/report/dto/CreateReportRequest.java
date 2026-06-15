@@ -7,6 +7,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
@@ -22,7 +23,7 @@ import jakarta.validation.constraints.Size;
 public record CreateReportRequest(
     @NotBlank
     @JsonProperty("container_id")
-    @Size(min = 12, max = 64, message = "Container ID must be between 12 and 64 characters")
+    @Size(min = 3, max = 64, message = "Container ID must be between 12 and 64 characters")
     @Pattern(
         regexp = "^[a-zA-Z0-9_-]+$", 
         message = "Container ID can only contain alphanumeric characters, hyphens, and underscores"
@@ -31,6 +32,7 @@ public record CreateReportRequest(
 
     @NotBlank
     @JsonProperty("app_name")
+    @Size(min = 3, max = 64, message = "App name must be between 3 and 64 characters")
     @Pattern(
         regexp = "^[a-zA-Z0-9._-]+$", 
         message = "App name can only contain alphanumeric characters, dots, hyphens, and underscores"
@@ -39,7 +41,7 @@ public record CreateReportRequest(
 
     @JsonProperty("cpu_usage_percent")
     @DecimalMin(value = "0.0", message = "CPU usage must be at least 0.0")
-    @DecimalMax(value = "1.0", message = "CPU usage cannot exceed 1.0")
+    @DecimalMax(value = "100.0", message = "CPU usage cannot exceed 100.0")
     Double cpuUsagePercent,
 
     @JsonProperty("memory_usage_mb")
@@ -47,6 +49,7 @@ public record CreateReportRequest(
     Integer memoryUsageMb,
 
     @JsonProperty("reported_at")
+    @NotNull
     LocalDateTime reportedAt
 ) {
 }

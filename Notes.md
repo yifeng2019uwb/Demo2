@@ -381,6 +381,11 @@ Set as **string values** (not toggles):
 | `SPRING_DATASOURCE_USERNAME` | your DB username | Plain |
 | `SPRING_DATASOURCE_PASSWORD` | your DB password | **Encrypted** |
 
+
+jdbc:postgresql://db-pgsql-sfo3-43656-do-user-38453229-0.j.db.ondigitalocean.com:25060/<database>?sslmode=require
+
+
+
 ### 7e — Database environment (DO Database UI)
 Go to **Databases → your cluster → Settings → Trusted Sources → Add** → select your App Platform app from the dropdown. DO handles the dynamic IP range automatically.
 
