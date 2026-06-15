@@ -1,0 +1,20 @@
+name: spring-boot-service
+region: sfo3
+services:
+  - name: demo-api-service
+    # 1. CHANGE THIS to the exact folder path where your build.gradle is saved
+    source_dir: /
+    
+    # 2. Tell the builder to run the Gradle wrapper to compile your code
+    build_command: ./gradlew bootJar
+    
+    # 3. Tell the runner where the compiled .jar file is located inside that folder
+    run_command: java -jar build/libs/demo-0.0.1-SNAPSHOT.jar
+    
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    envs:
+      - key: SPRING_PROFILES_ACTIVE
+        scope: RUN_TIME
+        value: prod
