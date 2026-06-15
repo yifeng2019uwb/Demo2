@@ -37,7 +37,7 @@ Before writing any code, provision the PostgreSQL database so it's ready when yo
 2. **Databases → Create → PostgreSQL** — pick the same region you'll deploy the app to
 3. Wait ~2 min for provisioning
 4. Note the connection details (you'll need them in Step 7):
-   - Host, Port, Database name, Username, Password
+   - Host, Port, Database name (`defaultdb`), Username, Password
 
 `ddl-auto=update` in the prod profile will auto-create tables on first startup — no manual SQL needed.
 
@@ -49,53 +49,47 @@ Go to https://start.spring.io/ and generate with:
 - **Language**: Java | **Build**: Gradle
 - **Dependencies**: Spring Web, Spring Data JPA, Validation, Actuator, Lombok, H2, PostgreSQL
 
-In `build.gradle`, scope H2 to tests only:
+In `build.gradle`, scope H2 to tests only so it is not included in the production runtime:
 ```groovy
 runtimeOnly 'org.postgresql:postgresql'
 testRuntimeOnly 'com.h2database:h2'
 ```
 
-Add a `Makefile`:
-```makefile
-build:
-    ./gradlew build -x test
-test:
-    ./gradlew cleanTest test
-run:
-    ./gradlew bootRun
-```
+Define all request/response DTOs as Java records before writing any logic. This locks the API contract early and lets you compile-check the whole chain before any real implementation.
 
-Define all request/response DTOs before writing any logic:
-```java
-public record CreateEventRequest(
-    @NotBlank String customer_id,
-    @NotBlank String event_type,
-    @NotNull LocalDate timestamp,
-    Map<String, String> metadata
-) {}
+Configure two Spring profiles in `src/main/resources/`:
 
-public record CreateEventResponse(String event_id) {}
-// GetEventResponse, GetSummaryResponse, ListTopEventsResponse ...
-```
-
-Configure profiles and observability in `src/main/resources/`:
-
-**`application.properties`** (local / H2 default):
+**`application.properties`** — default profile, used locally and in unit tests:
 ```properties
+# In-memory H2 — no external dependency, resets on every restart
 spring.datasource.url=jdbc:h2:mem:testdb
+
+# create-drop: creates schema on startup, drops on shutdown — safe for local dev
 spring.jpa.hibernate.ddl-auto=create-drop
+
+# Expose only the health endpoint — never expose * in any environment
 management.endpoints.web.exposure.include=health
+
+# show-details=always makes /actuator/health include DB connectivity status
 management.endpoint.health.show-details=always
 ```
-> Do NOT set `spring.datasource.driver-class-name` — let Spring auto-detect from the URL.
+> Do NOT set `spring.datasource.driver-class-name` here — Spring auto-detects from the H2 URL. Setting it explicitly conflicts when the prod profile injects a PostgreSQL URL.
 
-**`application-prod.properties`** (DO PostgreSQL):
+**`application-prod.properties`** — prod profile, loaded on DO when `SPRING_PROFILES_ACTIVE=prod`:
 ```properties
+spring.application.name=report
+
+# Values injected at runtime from DO App Platform environment variables
 spring.datasource.url=${SPRING_DATASOURCE_URL}
 spring.datasource.username=${SPRING_DATASOURCE_USERNAME}
 spring.datasource.password=${SPRING_DATASOURCE_PASSWORD}
+
+# Must be set explicitly for PostgreSQL — Spring cannot auto-detect without the URL at parse time
 spring.datasource.driver-class-name=org.postgresql.Driver
+
+# update: creates/alters tables without dropping data — NEVER use create-drop in prod
 spring.jpa.hibernate.ddl-auto=update
+
 management.endpoints.web.exposure.include=health
 management.endpoint.health.show-details=always
 ```
@@ -104,34 +98,12 @@ management.endpoint.health.show-details=always
 
 ## Step 2 — Controller (dummy responses) `[Engineering Quality]`
 
-Create controller(s) with hardcoded dummy returns to verify routing compiles and works end-to-end before any real logic.
+Create the controller with all routes returning hardcoded dummy values. This verifies routing, annotations, and DTO wiring compiles before writing any real logic.
 
-```java
-@RestController
-@RequestMapping("/api/v1/events")
-public class EventController {
-
-    @PostMapping
-    public ResponseEntity<CreateEventResponse> createEvent(@Valid @RequestBody CreateEventRequest request) {
-        return ResponseEntity.status(201).body(new CreateEventResponse("dummy-id"));
-    }
-
-    @GetMapping("/{event_id}")
-    public ResponseEntity<GetEventResponse> getEvent(@PathVariable String event_id) {
-        return ResponseEntity.ok(new GetEventResponse(...));
-    }
-
-    @GetMapping("/summary")
-    public ResponseEntity<GetSummaryResponse> getSummary(@ModelAttribute GetSummaryRequest request) {
-        return ResponseEntity.ok(new GetSummaryResponse(...));
-    }
-
-    @GetMapping("/top-events")
-    public ResponseEntity<ListTopEventsResponse> getTopEvents(@ModelAttribute ListTopEventsRequest request) {
-        return ResponseEntity.ok(new ListTopEventsResponse(...));
-    }
-}
-```
+- `@PostMapping` → return `ResponseEntity.status(201).body(...)`
+- `@GetMapping("/{id}")` → `@PathVariable` for path params
+- `@GetMapping("/summary")` → `@ModelAttribute` for query params (not `@RequestBody`)
+- `@GetMapping("/top-consumers")` → `@ModelAttribute` with limit param
 
 Run `make build` to confirm it compiles.
 
@@ -139,148 +111,34 @@ Run `make build` to confirm it compiles.
 
 ## Step 3 — Service interface and dummy implementation `[Engineering Quality]`
 
-Define the service interface, then implement with dummy returns:
+Define a service interface with one method per endpoint. Implement with dummy returns.
 
-```java
-public interface EventService {
-    CreateEventResponse createEvent(CreateEventRequest request);
-    GetEventResponse getEvent(String eventId);
-    GetSummaryResponse getSummary(String customerId, LocalDate start, LocalDate end);
-    ListTopEventsResponse getTopEvents(int limit);
-}
-
-@Service
-public class EventServiceImpl implements EventService {
-    @Override
-    public CreateEventResponse createEvent(CreateEventRequest request) {
-        return new CreateEventResponse("dummy-id");
-    }
-    // ...
-}
-```
-
-Wire service into controller via constructor injection:
-```java
-private final EventService eventService;
-
-public EventController(EventService eventService) {
-    this.eventService = eventService;
-}
-```
-
-Replace dummy controller returns with `eventService.xxx()` calls.
+Wire the service into the controller via constructor injection (not field injection). Replace all dummy controller returns with `service.xxx()` calls. Run `make build` again.
 
 ---
 
 ## Step 4 — Model and DAO `[Engineering Quality]`
 
-**Entity:**
-```java
-@Entity
-@Table(name = "events", indexes = {
-    @Index(name = "idx_customer_id", columnList = "customer_id"),
-    @Index(name = "idx_timestamp_desc", columnList = "timestamp DESC")
-})
-public class Event {
-    @Id
-    private String id;
-    @Column(name = "customer_id") private String customerId;
-    @Column(name = "type")        private String type;
-    @Column(name = "timestamp")   private LocalDate timestamp;
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(name = "metadata")    private Map<String, String> metadata;
+**Entity:** annotate with `@Entity`, `@Table`, `@Id`, `@Column`. Add `@Index` on columns used in query filters (e.g. `container_id`, `reported_at DESC`) — Hibernate generates these on `ddl-auto=update`.
 
-    protected Event() {}
-    public Event(String customerId, String type, LocalDate timestamp, Map<String, String> metadata) {
-        this.id = UUID.randomUUID().toString();
-        // ...
-    }
-}
-```
-
-**DAO:**
-```java
-@Repository
-public interface EventDao extends JpaRepository<Event, String> {
-    Optional<Event> findEventById(String id);
-    List<Event> findEventsByTimestampBetween(LocalDate start, LocalDate end);
-
-    @Query("SELECT e FROM Event e ORDER BY e.timestamp DESC")
-    List<Event> findTopEventsSortedByTimestampDesc(Pageable pageable);
-}
-```
+**DAO:** extend `JpaRepository<Entity, IdType>`. Use Spring Data derived query method names for simple filters (`findByXAndYBetween`). Use `@Query` for anything that needs sorting or aggregation.
 
 ---
 
 ## Step 5 — Implement service, add validation and error handling `[Engineering Quality]`
 
-**Custom exceptions** in `exception/` package:
-```java
-public class ValidationException extends RuntimeException {
-    public ValidationException(String message) { super(message); }
-}
-public class NotFoundException extends RuntimeException {
-    public NotFoundException(String message) { super(message); }
-}
-```
+Two custom exception classes in an `exception/` package: `ValidationException` (→ 400) and `NotFoundException` (→ 404).
 
-**GlobalExceptionHandler** — maps exceptions to HTTP codes:
-```java
-@RestControllerAdvice
-public class GlobalExceptionHandler {
-    @ExceptionHandler(ValidationException.class)
-    public ResponseEntity<Map<String, String>> handleValidation(ValidationException e) {
-        return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
-    }
-    @ExceptionHandler(NotFoundException.class)
-    public ResponseEntity<Map<String, String>> handleNotFound(NotFoundException e) {
-        return ResponseEntity.status(404).body(Map.of("error", e.getMessage()));
-    }
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<Map<String, String>> handleMethodArgNotValid(MethodArgumentNotValidException e) {
-        String msg = e.getBindingResult().getFieldErrors().stream()
-            .map(f -> f.getField() + ": " + f.getDefaultMessage())
-            .collect(Collectors.joining(", "));
-        return ResponseEntity.badRequest().body(Map.of("error", msg));
-    }
-}
-```
+`GlobalExceptionHandler` with `@RestControllerAdvice` maps exceptions to HTTP responses:
+- `ValidationException` → `400 Bad Request`
+- `NotFoundException` → `404 Not Found`
+- `MethodArgumentNotValidException` → `400 Bad Request` with field-level error messages
 
-**Service implementation** — inject DAO, validate inputs, throw exceptions, do NOT wrap in try/catch:
-```java
-@Service
-public class EventServiceImpl implements EventService {
-    private final EventDao eventDao;
-
-    public EventServiceImpl(EventDao eventDao) { this.eventDao = eventDao; }
-
-    @Override
-    public CreateEventResponse createEvent(CreateEventRequest request) {
-        validateUUID(request.customer_id());
-        validateTimestamp(request.timestamp());
-        Event saved = eventDao.save(new Event(request.customer_id(), request.event_type(), request.timestamp(), request.metadata()));
-        return new CreateEventResponse(saved.getId());
-    }
-
-    @Override
-    public GetEventResponse getEvent(String eventId) {
-        validateUUID(eventId);
-        Event e = eventDao.findEventById(eventId)
-            .orElseThrow(() -> new NotFoundException("Event not found: " + eventId));
-        return new GetEventResponse(e.getId(), e.getCustomerId(), e.getType(), e.getTimestamp(), e.getMetadata());
-    }
-
-    private void validateUUID(String uuid) {
-        try { UUID.fromString(uuid); }
-        catch (IllegalArgumentException e) { throw new ValidationException("Invalid UUID format"); }
-    }
-
-    private void validateTimestamp(LocalDate ts) {
-        if (ts == null) throw new ValidationException("Timestamp cannot be null");
-        if (ts.isAfter(LocalDate.now())) throw new ValidationException("Timestamp cannot be in the future");
-    }
-}
-```
+Service implementation rules:
+- Inject DAO via constructor, never field injection
+- Validate inputs first, then call DAO
+- Throw `NotFoundException` (not `ValidationException`) when a record is not found — "not found" is never a bad request
+- Do NOT wrap logic in try/catch — let exceptions propagate to the handler naturally
 
 Run `make build && make test`.
 
@@ -288,39 +146,21 @@ Run `make build && make test`.
 
 ## Step 6 — Unit tests `[Testing]`
 
-Add service tests with Mockito covering happy path and all validation edge cases:
+Use `@ExtendWith(MockitoExtension.class)` with `@Mock` on the DAO and `@InjectMocks` on the service.
 
-```java
-@ExtendWith(MockitoExtension.class)
-class EventServiceImplTest {
-    @Mock EventDao eventDao;
-    @InjectMocks EventServiceImpl service;
+Cover for each endpoint:
+- Happy path: mock DAO to return a valid entity, assert response fields
+- Not found: mock DAO to return empty Optional, assert `NotFoundException` is thrown
+- Validation edge cases: null timestamp, future timestamp, invalid ranges
 
-    @Test
-    void createEvent_savesAndReturnsId() {
-        when(eventDao.save(any())).thenReturn(new Event(...));
-        CreateEventResponse r = service.createEvent(new CreateEventRequest(VALID_UUID, "LOGIN", LocalDate.now(), null));
-        assertThat(r.event_id()).isNotNull();
-    }
-
-    @Test
-    void createEvent_throws_whenCustomerIdNotUuid() {
-        assertThatThrownBy(() -> service.createEvent(new CreateEventRequest("bad-id", ...)))
-            .isInstanceOf(ValidationException.class);
-    }
-    // ... cover all endpoints and edge cases
-}
-```
-
-```bash
-make test   # all tests must pass before deploying
-```
+Run `make test` — all tests must pass before deploying.
 
 ---
 
 ## Step 7 — Deploy to DO App Platform `[Automation & Workflow · Operational Excellence]`
 
 ### 7a — Dockerfile
+
 ```dockerfile
 FROM eclipse-temurin:21-jdk AS builder
 WORKDIR /app
@@ -330,32 +170,46 @@ RUN ./gradlew bootJar
 FROM eclipse-temurin:21-jre
 WORKDIR /app
 COPY --from=builder /app/build/libs/*.jar app.jar
-ENTRYPOINT ["java", "-Dspring.profiles.active=prod", "-jar", "app.jar"]
+ENTRYPOINT ["java", "-jar", "app.jar"]
 ```
-> Bake `-Dspring.profiles.active=prod` into the ENTRYPOINT — more reliable than relying on env var injection.
+
+Key points:
+- **Multi-stage build**: Stage 1 uses JDK (needs the compiler). Stage 2 uses JRE only — no compiler, ~200MB smaller image.
+- **`*.jar` wildcard**: avoids hardcoding the jar filename, which is derived from `settings.gradle` project name + version. Hardcoding causes a build failure if the name ever changes.
+- Profile activation is handled via the `SPRING_PROFILES_ACTIVE` env var in `app.yml`, not baked into the ENTRYPOINT.
 
 ### 7b — `.do/app.yml`
+
 ```yaml
 name: my-service
-region: sfo3          # must match the DB region
+region: sfo3          # must match the DB cluster region — cross-region = latency + egress cost
 services:
   - name: api
-    source_dir: /
+    source_dir: /     # root of the repo, where build.gradle lives
     build_command: ./gradlew bootJar
-    run_command: java -Dspring.profiles.active=prod -jar build/libs/*.jar
+    run_command: java -jar build/libs/*.jar
     http_port: 8080
-    instance_count: 1
-    instance_size_slug: basic-xxs
+    instance_count: 1             # increase for HA; 1 is fine for demo
+    instance_size_slug: basic-xxs # smallest/cheapest (~$5/mo), sufficient for demo
+    envs:
+      - key: SPRING_PROFILES_ACTIVE
+        scope: RUN_TIME           # injected at container startup, not during build
+        value: prod
 ```
 
 ### 7c — CI `.github/workflows/ci.yml`
+
+> **CRITICAL**: The directory must be `.github/workflows/` (plural). GitHub Actions silently ignores `.github/workflow/` (singular) — CI will never trigger.
+
 ```yaml
 name: CI
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # required for compatibility with newer actions
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -365,31 +219,39 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: gradle
+          cache: gradle             # caches ~/.gradle between runs — speeds up subsequent CI significantly
       - run: ./gradlew build -x test
       - run: ./gradlew test
 ```
 
+Build and test are separate steps so CI clearly shows which one failed.
+
 ### 7d — App environment variables (DO App Platform UI)
-Go to App Platform → your app → service component → **Environment Variables**.
-Set as **string values** (not toggles):
+
+Go to **App Platform → your app → service component → Environment Variables**.
 
 | Key | Value | Type |
 |-----|-------|------|
-| `SPRING_PROFILES_ACTIVE` | `prod` | Plain — **must be string, not boolean toggle** |
-| `SPRING_DATASOURCE_URL` | `jdbc:postgresql://<host>:<port>/<db>?sslmode=require` | Plain |
-| `SPRING_DATASOURCE_USERNAME` | your DB username | Plain |
-| `SPRING_DATASOURCE_PASSWORD` | your DB password | **Encrypted** |
+| `SPRING_PROFILES_ACTIVE` | `prod` | Plain — **use the text field, not the toggle; the toggle sends `true` instead of `prod`** |
+| `SPRING_DATASOURCE_URL` | see format below | Plain |
+| `SPRING_DATASOURCE_USERNAME` | your DB username (from DO DB connection details) | Plain |
+| `SPRING_DATASOURCE_PASSWORD` | your DB password | **Encrypted** — never store as plain text |
 
+JDBC URL format:
+```
+jdbc:postgresql://<host>:<port>/<dbname>?sslmode=require
+```
+- `<dbname>` is `defaultdb` by default on DO managed PostgreSQL
+- `sslmode=require` is mandatory — DO managed databases enforce SSL
 
-jdbc:postgresql://db-pgsql-sfo3-43656-do-user-38453229-0.j.db.ondigitalocean.com:25060/<database>?sslmode=require
+### 7e — Database Trusted Sources (DO Database UI)
 
+Go to **Databases → your cluster → Settings → Trusted Sources → Add** → select your App Platform app from the dropdown.
 
-
-### 7e — Database environment (DO Database UI)
-Go to **Databases → your cluster → Settings → Trusted Sources → Add** → select your App Platform app from the dropdown. DO handles the dynamic IP range automatically.
+DO manages the dynamic IP range of App Platform automatically — you don't need to whitelist specific IPs. Without this step, all connections from your app will be refused.
 
 ### 7f — Push and verify
+
 ```bash
 git add .
 git commit -m "initial implementation"
@@ -402,39 +264,35 @@ The following 1 profile is active: "prod"
 HikariPool-1 - Added connection ... url=jdbc:postgresql://...
 ```
 
-Verify health:
+Verify health endpoint:
 ```
-GET /actuator/health → { "status": "UP", "db": { "status": "UP" } }
+GET /actuator/health
+→ { "status": "UP", "components": { "db": { "status": "UP" } } }
 ```
 
 ---
 
 ## Step 8 — Integration tests `[Testing · Operational Excellence]`
 
-Write an HTTP-level integration test while waiting for the deploy, then run it against the live URL:
+Write HTTP-level integration tests in `Integration-test/` as a standalone suite — external to the app, treating the deployed service as a black box.
 
-```java
-public class EventIT {
-    static final String BASE_URL = "https://your-app.ondigitalocean.app";
-    static final HttpClient client = HttpClient.newHttpClient();
+### Java (plain `java` runner)
 
-    public static void main(String[] args) throws Exception {
-        String eventId = createEvent();
-        getEvent(eventId);
-        getSummary();
-        getTopEvents();
-        System.out.println("All tests passed!");
-    }
-}
-```
+No build tool needed. Uses only the Java standard library (`java.net.http`). Run with:
 
 ```bash
-java -ea Integration_test/EventIT.java
+java -ea Integration-test/EventIT.java
+
+# Add to Makefile:
+integ-test:
+    java -ea Integration-test/EventIT.java
 ```
 
-### Python integration test (alternative)
+Use plain `assert` statements (enabled by `-ea`). No JUnit annotations — nothing calls `@Test` methods when run this way.
 
-Place tests in `Integration-test/python/` as a standalone suite using `pytest` + `requests`:
+### Python (`pytest` + `requests`)
+
+Place tests in `Integration-test/python/` as a standalone suite:
 
 ```
 Integration-test/python/
@@ -454,7 +312,7 @@ integ-test-python:
     cd Integration-test/python && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -q && .venv/bin/pytest test_live_deployment.py -v
 ```
 
-Run against the live URL:
+Run:
 ```bash
 make integ-test-python
 
@@ -462,17 +320,18 @@ make integ-test-python
 BASE_URL=https://your-app.ondigitalocean.app make integ-test-python
 ```
 
-Add `.venv` to `.gitignore` so the virtual environment is not committed.
+Add `.venv` to `.gitignore`.
 
-> **Why not `pip install` directly?** macOS Homebrew Python enforces PEP 668 — system-wide pip installs are blocked. Always use a venv for project dependencies.
+> **Why venv?** macOS Homebrew Python enforces PEP 668 — `pip install` system-wide is blocked to protect the Homebrew Python installation. Always use a venv for project-level Python dependencies.
 
----
+> **Timestamp pitfall**: Python `datetime.now()` uses local time; the server compares against its own `LocalDateTime.now()` (UTC on DO). A `timedelta(hours=2)` future timestamp may appear as past time to the server if your local timezone is behind UTC. Use `timedelta(days=1)` for future timestamp tests to safely clear any timezone offset.
 
-After a successful run, verify data persisted in PostgreSQL:
+### Verify DB persistence after tests
+
 ```bash
 psql "postgres://<user>:<password>@<host>:<port>/<db>?sslmode=require"
-\dt          -- should show events table
-SELECT * FROM events LIMIT 5;
+\dt                        -- should show your tables
+SELECT * FROM reports LIMIT 5;
 ```
 
 ---
@@ -481,45 +340,12 @@ SELECT * FROM events LIMIT 5;
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| App uses H2 on DO | `SPRING_PROFILES_ACTIVE` not set or set to boolean `true` | Set value to string `prod` in env vars UI |
-| Connection timeout to DB | App Platform not in DB Trusted Sources | Add app from dropdown in DB → Settings → Trusted Sources |
-| Tables not created | Wrong profile active — `create-drop` drops tables on shutdown | Ensure `prod` profile loads with `ddl-auto=update` |
-| `driver-class-name` conflict | H2 driver set explicitly but PostgreSQL URL injected | Remove `spring.datasource.driver-class-name` from `application.properties` |
-| Service throws `UnsupportedOperationException` | Try/catch swallowing `ValidationException` | Remove try/catch wrappers — let exceptions propagate naturally |
-
-
-
-
-==================================================================================
-POST /events
-Body: {
-  "customer_id": "cust-123",
-  "event_type": "login",
-  "timestamp": "2026-06-12T10:00:00Z",
-  "metadata": { "ip": "10.0.0.1" }   ← optional
-}
-Response: 201 — { "event_id": "uuid" }
-
-
-GET /events/{event_id}
-Response: 200 — { event_id, customer_id, event_type, timestamp, metadata }
-Response: 404 — if not found
-
-
-GET /summary?customer_id=cust-123&start_time=...&end_time=...
-Response: 200 — {
-  "customer_id": "cust-123",
-  "total_events": 150,
-  "event_breakdown": { "login": 100, "purchase": 25, "logout": 25 }
-}
-
-GET /top-events?limit=10
-Response: 200 — {
-  "results": [
-    { "event_type": "login", "count": 120 },
-    { "event_type": "purchase", "count": 50 }
-  ]
-}
-
-GET /health
-Response: 200 — { "status": "healthy" }
+| App uses H2 on DO | `SPRING_PROFILES_ACTIVE` not set or set to boolean `true` | Set value to string `prod` using the text field, not the toggle |
+| Connection refused to DB | App Platform not in DB Trusted Sources | Add app from dropdown in DB → Settings → Trusted Sources |
+| Tables not created | Wrong profile active — `create-drop` drops tables on shutdown | Ensure `prod` profile is active so `ddl-auto=update` loads |
+| `driver-class-name` conflict | H2 driver set explicitly in base properties but PostgreSQL URL injected | Remove `spring.datasource.driver-class-name` from `application.properties` |
+| Service throws `UnsupportedOperationException` | Try/catch swallowing `ValidationException` | Remove try/catch wrappers — let exceptions propagate to `GlobalExceptionHandler` |
+| CI never triggers | `.github/workflow/` directory (singular) is silently ignored | Rename to `.github/workflows/` (plural) |
+| Build fails: jar not found | Hardcoded jar name in Dockerfile doesn't match `settings.gradle` project name | Use `*.jar` wildcard in `COPY --from=builder` |
+| Timestamps stored/compared without timezone | `LocalDateTime` has no timezone — future-timestamp validation breaks when client and server are in different timezones | Use `OffsetDateTime` end-to-end (entity, all DTOs, DAO, service); maps to `timestamptz` in PostgreSQL |
+| `spring.jackson.serialization.write-dates-as-timestamps=false` fails to bind | Spring Boot 4.x uses Jackson 3, where `WRITE_DATES_AS_TIMESTAMPS` moved from `SerializationFeature` to `DateTimeFeature` | Use `spring.jackson.json.datetime.write-dates-as-timestamps=false` instead |

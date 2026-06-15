@@ -1,6 +1,6 @@
 package com.example.report.service;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.List;
@@ -115,11 +115,11 @@ public class ReportServiceImpl implements ReportService{
 
     }
 
-    private void validateTimestamp(LocalDateTime timestamp) {
+    private void validateTimestamp(OffsetDateTime timestamp) {
         if (timestamp == null) {
             throw new ValidationException("Timestamp is required");
         }
-        if (timestamp.isAfter(LocalDateTime.now())) {
+        if (timestamp.isAfter(OffsetDateTime.now())) {
             throw new ValidationException("Timestamp cannot be in the future");
         }
     }

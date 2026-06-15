@@ -1,6 +1,6 @@
 package com.example.report.dto;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -23,11 +23,11 @@ public record GetResourceUsageSummaryRequest (
 
     @NotNull
     @JsonProperty("start")
-    LocalDateTime start,
+    OffsetDateTime start,
     
     @NotNull
     @JsonProperty("end")
-    LocalDateTime end
+    OffsetDateTime end
 ) {
     
 }

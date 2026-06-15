@@ -3,7 +3,7 @@ package com.example.report.service;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
@@ -34,8 +34,8 @@ class ReportServiceImplValidationTest {
 
     @Test
     void validateTimestamp_ExactlyNow_ShouldPass() {
-        // Boundary check: LocalDateTime.now() should be valid
-        LocalDateTime now = LocalDateTime.now();
+        // Boundary check: OffsetDateTime.now() should be valid
+        OffsetDateTime now = OffsetDateTime.now();
         CreateReportRequest request = new CreateReportRequest(
             "container-12345", "billing-service", 0.5, 256, now
         );
@@ -63,7 +63,7 @@ class ReportServiceImplValidationTest {
     @Test
     void validateTimestamp_FutureDate_ThrowsValidationException() {
         // Boundary check: 1 second into the future should fail
-        LocalDateTime future = LocalDateTime.now().plusSeconds(5);
+        OffsetDateTime future = OffsetDateTime.now().plusSeconds(5);
         CreateReportRequest request = new CreateReportRequest(
             "container-12345", "billing-service", 0.5, 256, future
         );
@@ -97,7 +97,7 @@ void getResourceUsageSummary_WhenCpuUsageIsExactlyZero_HandlesAveragesCorrectly(
     String containerId = "container-12345";
     String appName = "billing-service";
     GetResourceUsageSummaryRequest request = new GetResourceUsageSummaryRequest(
-        containerId, appName, LocalDateTime.now().minusDays(1), LocalDateTime.now()
+        containerId, appName, OffsetDateTime.now().minusDays(1), OffsetDateTime.now()
     );
 
     // FIX: Remove the UUID argument so the parameters align correctly with your constructor
@@ -107,14 +107,14 @@ void getResourceUsageSummary_WhenCpuUsageIsExactlyZero_HandlesAveragesCorrectly(
         appName, 
         0.0, 
         0, 
-        LocalDateTime.now().minusHours(1)
+        OffsetDateTime.now().minusHours(1)
     );
     
     when(reportDao.findReportByContainerIdAndAppNameAndReportedAtBetween(
         eq(containerId),      // Wrapper matcher for Container ID
         eq(appName),     // Wrapper matcher for App Name
-        any(LocalDateTime.class),   // Matcher for Start time
-    any(LocalDateTime.class)    // Matcher for End time
+        any(OffsetDateTime.class),   // Matcher for Start time
+    any(OffsetDateTime.class)    // Matcher for End time
     )).thenReturn(java.util.List.of(idleReport));
 
     var response = reportService.getResourceUsageSummary(request);

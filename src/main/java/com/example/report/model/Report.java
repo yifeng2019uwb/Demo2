@@ -1,6 +1,6 @@
 package com.example.report.model;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 import jakarta.persistence.Column;
@@ -8,7 +8,6 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
-import jakarta.persistence.criteria.CriteriaBuilder.In;
 
 /*
 {
@@ -48,12 +47,12 @@ public class Report {
     private Integer memoryUsageMb;
 
     @Column(name = "reported_at")
-    private LocalDateTime reportedAt;
+    private OffsetDateTime reportedAt;
 
     public Report() {
     }
 
-    public Report(UUID reportId, String containerId, String appName, Double cpuUsagePercent, Integer memoryUsageMb, LocalDateTime reportedAt) {
+    public Report(UUID reportId, String containerId, String appName, Double cpuUsagePercent, Integer memoryUsageMb, OffsetDateTime reportedAt) {
         this.reportId = reportId;
         this.containerId = containerId;
         this.appName = appName;
@@ -88,7 +87,7 @@ public class Report {
     }
 
     // Getter for reportedAt
-    public LocalDateTime getReportedAt() {
+    public OffsetDateTime getReportedAt() {
         return this.reportedAt;
     }
 

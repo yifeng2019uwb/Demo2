@@ -1,6 +1,6 @@
 package com.example.report.dto;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 /*
@@ -21,6 +21,6 @@ public record GetReportResponse (
     String app_name,
     Double cpu_usage_percent,
     Integer memory_usage_mb,
-    LocalDateTime report_at
+    OffsetDateTime reported_at
 ) {
 }

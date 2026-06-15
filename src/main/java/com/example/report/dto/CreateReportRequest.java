@@ -1,6 +1,6 @@
 package com.example.report.dto;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -50,6 +50,6 @@ public record CreateReportRequest(
 
     @JsonProperty("reported_at")
     @NotNull
-    LocalDateTime reportedAt
+    OffsetDateTime reportedAt
 ) {
 }
