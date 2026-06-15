@@ -15,6 +15,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.example.report.dao.ReportDao;
 import com.example.report.dto.CreateReportRequest;
 import com.example.report.dto.GetResourceUsageSummaryRequest;
+import com.example.report.exception.NotFoundException;
 import com.example.report.exception.ValidationException;
 import com.example.report.model.Report;
 
@@ -84,7 +85,7 @@ class ReportServiceImplValidationTest {
         UUID nonExistentId = UUID.randomUUID();
         when(reportDao.findReportById(nonExistentId)).thenReturn(java.util.Optional.empty());
 
-        ValidationException exception = assertThrows(ValidationException.class, () -> {
+        NotFoundException exception = assertThrows(NotFoundException.class, () -> {
             reportService.getReport(nonExistentId);
         });
 
