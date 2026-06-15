@@ -22,7 +22,7 @@ import jakarta.persistence.Table;
    */
 
 @Entity
-@Table(name = "reports",
+@Table(name = "reports_v2",
     indexes = {
         @Index(name = "idx_container_app", columnList = "containerId, appName"),
         @Index(name = "idx_reported_at", columnList = "reportedAt DESC")
