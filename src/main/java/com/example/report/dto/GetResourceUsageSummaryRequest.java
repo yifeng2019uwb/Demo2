@@ -8,6 +8,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.web.bind.annotation.BindParam;
 
 /*
 **GET** `/api/v1/reports/summary?app_name=<name>&start=<date>&end=<date>`
@@ -16,21 +17,21 @@ import org.springframework.format.annotation.DateTimeFormat;
 public record GetResourceUsageSummaryRequest (
 
     @NotBlank
-    @JsonProperty("container_id")
+    @BindParam("container_id")
     String containerId,
 
     @NotBlank
-    @JsonProperty("app_name")
+    @BindParam("app_name")
     String appName,
 
     @NotNull
     @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
-    @JsonProperty("start")
+    @BindParam("start")
     OffsetDateTime start,
 
     @NotNull
     @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
-    @JsonProperty("end")
+    @BindParam("end")
     OffsetDateTime end
 ) {
     
