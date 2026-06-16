@@ -11,21 +11,32 @@
 | **Engineering Quality** | Clean code organization, sensible validation, meaningful error handling |
 | **Testing** | Structured automated tests — unit tests with Mockito, integration tests against live service |
 | **Automation & Workflow** | CI via GitHub Actions, Dockerfile, automated deploy on push to main |
-| **Operational Excellence** | Observability (actuator health + DB status), configurable profiles (H2 local / PostgreSQL prod), scalable deployment config |
+| **Operational Excellence** | Observability (actuator health + DB status), configurable profiles, scalable deployment config |
 
-### Step → Criterion mapping
+### Step plan and timing
 
-| Step | Criterion |
-|------|-----------|
-| Step 0 — Create DO database | Operational Excellence |
-| Step 1 — Init, DTOs, profiles config | Engineering Quality · Operational Excellence |
-| Step 2 — Controller (dummy) | Engineering Quality |
-| Step 3 — Service interface + dummy impl | Engineering Quality |
-| Step 4 — Model + DAO | Engineering Quality |
-| Step 5 — Real impl + validation + error handling | Engineering Quality |
-| Step 6 — Unit tests | Testing |
-| Step 7 — Deploy (Dockerfile, app.yml, CI, env, DB trust) | Automation & Workflow · Operational Excellence |
-| Step 8 — Integration tests | Testing · Operational Excellence |
+| Time | Step | Criterion | Note |
+|------|------|-----------|------|
+| 0:00 | Step 0 — Provision DO DB | Operational Excellence | Starts in background while you code |
+| 0:20 | Step 1 — DTOs + profiles | Engineering Quality · Operational Excellence | |
+| 0:30 | Step 2 — Controller (dummy returns) | Engineering Quality | |
+| 0:40 | Step 3 — Service (dummy returns) | Engineering Quality | |
+| 1:00 | Step 4 — Model + DAO | Engineering Quality | **Deploy here** — DO build takes ~3 min |
+| 1:30 | Step 5 — Real impl + validation + error handling | Engineering Quality | |
+| 2:00 | Step 6 — Unit tests | Testing | |
+| 2:20 | Step 8 — Integration tests | Testing · Operational Excellence | Requires live service |
+| 2:20+ | Polish — README, alerts, health checks, demo | Automation & Workflow · Operational Excellence | |
+
+**Checkpoints — glance at these only:**
+
+| Clock | Must be done |
+|-------|-------------|
+| 1:00 | Model + DAO done, **deploy triggered** |
+| 1:30 | Service impl done, app live on DO |
+| 2:00 | Unit tests done |
+| 2:30 | Integration tests done, demo ready |
+
+**Why deploy at Step 4:** `ddl-auto=update` creates the DB table on first startup — lock down the schema before then. Wrong column type (`LocalDateTime` → `timestamp` instead of `timestamptz`) or PK type requires a table rename or migration to fix. Don't leave deploy to the last 20 minutes — infrastructure issues are unpredictable.
 
 ---
 
@@ -49,59 +60,22 @@ Go to https://start.spring.io/ and generate with:
 - **Language**: Java | **Build**: Gradle
 - **Dependencies**: Spring Web, Spring Data JPA, Validation, Actuator, Lombok, H2, PostgreSQL
 
-In `build.gradle`, scope H2 to tests only so it is not included in the production runtime:
-```groovy
-runtimeOnly 'org.postgresql:postgresql'
-testRuntimeOnly 'com.h2database:h2'
-```
+Scope H2 to tests only in `build.gradle` so it is not included in the production runtime.
 
 Define all request/response DTOs as Java records before writing any logic. This locks the API contract early and lets you compile-check the whole chain before any real implementation.
 
-Configure two Spring profiles in `src/main/resources/`:
+Configure two Spring profiles — see `src/main/resources/application.properties` (H2, local) and `application-prod.properties` (PostgreSQL, DO).
 
-**`application.properties`** — default profile, used locally and in unit tests:
-```properties
-# In-memory H2 — no external dependency, resets on every restart
-spring.datasource.url=jdbc:h2:mem:testdb
-
-# create-drop: creates schema on startup, drops on shutdown — safe for local dev
-spring.jpa.hibernate.ddl-auto=create-drop
-
-# Expose only the health endpoint — never expose * in any environment
-management.endpoints.web.exposure.include=health
-
-# show-details=always makes /actuator/health include DB connectivity status
-management.endpoint.health.show-details=always
-```
-> Do NOT set `spring.datasource.driver-class-name` here — Spring auto-detects from the H2 URL. Setting it explicitly conflicts when the prod profile injects a PostgreSQL URL.
-
-**`application-prod.properties`** — prod profile, loaded on DO when `SPRING_PROFILES_ACTIVE=prod`:
-```properties
-spring.application.name=report
-
-# Values injected at runtime from DO App Platform environment variables
-spring.datasource.url=${SPRING_DATASOURCE_URL}
-spring.datasource.username=${SPRING_DATASOURCE_USERNAME}
-spring.datasource.password=${SPRING_DATASOURCE_PASSWORD}
-
-# Must be set explicitly for PostgreSQL — Spring cannot auto-detect without the URL at parse time
-spring.datasource.driver-class-name=org.postgresql.Driver
-
-# update: creates/alters tables without dropping data — NEVER use create-drop in prod
-spring.jpa.hibernate.ddl-auto=update
-
-management.endpoints.web.exposure.include=health
-management.endpoint.health.show-details=always
-```
+> **Pitfall**: Do NOT set `spring.datasource.driver-class-name` in the base properties — Spring auto-detects from the H2 URL. Setting it explicitly conflicts when the prod profile injects a PostgreSQL URL.
 
 ---
 
 ## Step 2 — Controller (dummy responses) `[Engineering Quality]`
 
-Create the controller with all routes returning hardcoded dummy values. This verifies routing, annotations, and DTO wiring compiles before writing any real logic.
+Create the controller with all routes returning hardcoded dummy values. Verifies routing and DTO wiring compiles before writing any real logic.
 
-- `@PostMapping` → return `ResponseEntity.status(201).body(...)`
-- `@GetMapping("/{id}")` → `@PathVariable` for path params
+- `@PostMapping` → `ResponseEntity.status(201).body(...)`
+- `@GetMapping("/{id}")` → `@PathVariable`
 - `@GetMapping("/summary")` → `@ModelAttribute` for query params (not `@RequestBody`)
 - `@GetMapping("/top-consumers")` → `@ModelAttribute` with limit param
 
@@ -119,26 +93,30 @@ Wire the service into the controller via constructor injection (not field inject
 
 ## Step 4 — Model and DAO `[Engineering Quality]`
 
-**Entity:** annotate with `@Entity`, `@Table`, `@Id`, `@Column`. Add `@Index` on columns used in query filters (e.g. `container_id`, `reported_at DESC`) — Hibernate generates these on `ddl-auto=update`.
+See `src/main/java/com/example/report/model/` and `dao/`.
 
-**DAO:** extend `JpaRepository<Entity, IdType>`. Use Spring Data derived query method names for simple filters (`findByXAndYBetween`). Use `@Query` for anything that needs sorting or aggregation.
+- **Entity**: UUID PK, `OffsetDateTime` for timestamps (maps to `timestamptz`), `@Index` on query filter columns
+- **DAO**: extend `JpaRepository`. Use Spring Data derived query names for simple filters; `@Query` for aggregation.
+
+> **Lock down before first deploy**: PK type and timestamp type are hard to change after the table is created. `OffsetDateTime` → `timestamptz`. `LocalDateTime` → `timestamp` (no timezone) — breaks future-timestamp validation across timezones.
 
 ---
 
 ## Step 5 — Implement service, add validation and error handling `[Engineering Quality]`
 
-Two custom exception classes in an `exception/` package: `ValidationException` (→ 400) and `NotFoundException` (→ 404).
+See `src/main/java/com/example/report/service/` and `exception/`.
 
-`GlobalExceptionHandler` with `@RestControllerAdvice` maps exceptions to HTTP responses:
-- `ValidationException` → `400 Bad Request`
-- `NotFoundException` → `404 Not Found`
-- `MethodArgumentNotValidException` → `400 Bad Request` with field-level error messages
+`GlobalExceptionHandler` (`@RestControllerAdvice`) maps exceptions to HTTP responses:
+- `ValidationException` → `400`
+- `NotFoundException` → `404`
+- `MethodArgumentNotValidException` → `400` (field errors from `@RequestBody @Valid`)
+- `BindException` → `400` (field errors from `@ModelAttribute @Valid`)
 
-Service implementation rules:
-- Inject DAO via constructor, never field injection
+Service rules:
+- Constructor injection, never field injection
 - Validate inputs first, then call DAO
-- Throw `NotFoundException` (not `ValidationException`) when a record is not found — "not found" is never a bad request
-- Do NOT wrap logic in try/catch — let exceptions propagate to the handler naturally
+- `NotFoundException` (not `ValidationException`) when a record is not found
+- No try/catch — let exceptions propagate to the handler naturally
 
 Run `make build && make test`.
 
@@ -146,14 +124,14 @@ Run `make build && make test`.
 
 ## Step 6 — Unit tests `[Testing]`
 
-Use `@ExtendWith(MockitoExtension.class)` with `@Mock` on the DAO and `@InjectMocks` on the service.
+See `src/test/java/com/example/report/`.
 
-Cover for each endpoint:
-- Happy path: mock DAO to return a valid entity, assert response fields
-- Not found: mock DAO to return empty Optional, assert `NotFoundException` is thrown
-- Validation edge cases: null timestamp, future timestamp, invalid ranges
+- `service/` — Mockito, all methods, assert every response field
+- `controller/` — MockMvc `standaloneSetup` with `GlobalExceptionHandler` wired in
+- `dto/` — Jakarta `Validator` directly, one test per constraint
+- `exception/` — call handler methods directly with constructed exceptions
 
-Run `make test` — all tests must pass before deploying.
+Run `make test`.
 
 ---
 
@@ -161,158 +139,52 @@ Run `make test` — all tests must pass before deploying.
 
 ### 7a — Dockerfile
 
-```dockerfile
-FROM eclipse-temurin:21-jdk AS builder
-WORKDIR /app
-COPY . .
-RUN ./gradlew bootJar
-
-FROM eclipse-temurin:21-jre
-WORKDIR /app
-COPY --from=builder /app/build/libs/*.jar app.jar
-ENTRYPOINT ["java", "-jar", "app.jar"]
-```
-
-Key points:
-- **Multi-stage build**: Stage 1 uses JDK (needs the compiler). Stage 2 uses JRE only — no compiler, ~200MB smaller image.
-- **`*.jar` wildcard**: avoids hardcoding the jar filename, which is derived from `settings.gradle` project name + version. Hardcoding causes a build failure if the name ever changes.
-- Profile activation is handled via the `SPRING_PROFILES_ACTIVE` env var in `app.yml`, not baked into the ENTRYPOINT.
+See `Dockerfile` — multi-stage build (JDK builder → JRE runtime, ~200MB smaller). Uses `*.jar` wildcard to avoid hardcoding the jar name from `settings.gradle`.
 
 ### 7b — `.do/app.yml`
 
-```yaml
-name: my-service
-region: sfo3          # must match the DB cluster region — cross-region = latency + egress cost
-services:
-  - name: api
-    source_dir: /     # root of the repo, where build.gradle lives
-    build_command: ./gradlew bootJar
-    run_command: java -jar build/libs/*.jar
-    http_port: 8080
-    instance_count: 1             # increase for HA; 1 is fine for demo
-    instance_size_slug: basic-xxs # smallest/cheapest (~$5/mo), sufficient for demo
-    envs:
-      - key: SPRING_PROFILES_ACTIVE
-        scope: RUN_TIME           # injected at container startup, not during build
-        value: prod
-```
+See `.do/app.yml` — region must match DB cluster region. `SPRING_PROFILES_ACTIVE=prod` injected at `RUN_TIME` (not build time).
 
-### 7c — CI `.github/workflows/ci.yml`
+### 7c — CI
 
-> **CRITICAL**: The directory must be `.github/workflows/` (plural). GitHub Actions silently ignores `.github/workflow/` (singular) — CI will never trigger.
+See `.github/workflows/ci.yml` — build and test as separate steps so CI shows which one failed.
 
-```yaml
-name: CI
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # required for compatibility with newer actions
-jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-          cache: gradle             # caches ~/.gradle between runs — speeds up subsequent CI significantly
-      - run: ./gradlew build -x test
-      - run: ./gradlew test
-```
-
-Build and test are separate steps so CI clearly shows which one failed.
+> **CRITICAL**: Directory must be `.github/workflows/` (plural). GitHub Actions silently ignores `.github/workflow/` (singular) — CI will never trigger.
 
 ### 7d — App environment variables (DO App Platform UI)
 
-Go to **App Platform → your app → service component → Environment Variables**.
+Go to **App Platform → your app → Settings → Environment Variables**.
 
-| Key | Value | Type |
-|-----|-------|------|
-| `SPRING_PROFILES_ACTIVE` | `prod` | Plain — **use the text field, not the toggle; the toggle sends `true` instead of `prod`** |
-| `SPRING_DATASOURCE_URL` | see format below | Plain |
-| `SPRING_DATASOURCE_USERNAME` | your DB username (from DO DB connection details) | Plain |
-| `SPRING_DATASOURCE_PASSWORD` | your DB password | **Encrypted** — never store as plain text |
+| Key | Type | Note |
+|-----|------|------|
+| `SPRING_PROFILES_ACTIVE` | Plain | Use the text field, not the toggle — toggle sends `true` instead of `prod` |
+| `SPRING_DATASOURCE_URL` | Plain | `jdbc:postgresql://<host>:<port>/defaultdb?sslmode=require` |
+| `SPRING_DATASOURCE_USERNAME` | Plain | From DO DB connection details |
+| `SPRING_DATASOURCE_PASSWORD` | **Encrypted** | Never plain text |
 
-JDBC URL format:
+### 7e — After app is created, before first working deploy
+
+The first deploy will fail with a DB connection error until you complete these two steps:
+
+1. **DB Trusted Sources** — Databases → your cluster → Settings → Trusted Sources → Add → select your app
+2. **Env vars** — add all 4 vars above (Step 7d)
+
+Then: **App Platform → your app → Actions → Force Rebuild and Deploy**
+
+### 7f — Verify
+
+Check startup logs for `prod` profile active and HikariPool connected.
+
 ```
-jdbc:postgresql://<host>:<port>/<dbname>?sslmode=require
-```
-- `<dbname>` is `defaultdb` by default on DO managed PostgreSQL
-- `sslmode=require` is mandatory — DO managed databases enforce SSL
-
-### 7e — Database Trusted Sources (DO Database UI)
-
-Go to **Databases → your cluster → Settings → Trusted Sources → Add** → select your App Platform app from the dropdown.
-
-DO manages the dynamic IP range of App Platform automatically — you don't need to whitelist specific IPs. Without this step, all connections from your app will be refused.
-
-### 7f — Push and verify
-
-```bash
-git add .
-git commit -m "initial implementation"
-git push origin main
-```
-
-DO deploys automatically on push (~2-3 min). Check startup logs for:
-```
-The following 1 profile is active: "prod"
-HikariPool-1 - Added connection ... url=jdbc:postgresql://...
-```
-
-Verify health endpoint:
-```
-GET /actuator/health
-→ { "status": "UP", "components": { "db": { "status": "UP" } } }
+GET /actuator/health → { "status": "UP", "components": { "db": { "status": "UP" } } }
 ```
 
 ---
 
 ## Step 8 — Integration tests `[Testing · Operational Excellence]`
 
-Write HTTP-level integration tests in `Integration-test/` as a standalone suite — external to the app, treating the deployed service as a black box.
+See `Integration-test/python/test_live_deployment.py`.
 
-### Java (plain `java` runner)
-
-No build tool needed. Uses only the Java standard library (`java.net.http`). Run with:
-
-```bash
-java -ea Integration-test/EventIT.java
-
-# Add to Makefile:
-integ-test:
-    java -ea Integration-test/EventIT.java
-```
-
-Use plain `assert` statements (enabled by `-ea`). No JUnit annotations — nothing calls `@Test` methods when run this way.
-
-### Python (`pytest` + `requests`)
-
-Place tests in `Integration-test/python/` as a standalone suite:
-
-```
-Integration-test/python/
-  requirements.txt          # pytest, requests
-  test_live_deployment.py
-```
-
-**`requirements.txt`:**
-```
-pytest
-requests
-```
-
-**Makefile target** — creates a venv automatically (required on macOS/Homebrew Python due to PEP 668):
-```makefile
-integ-test-python:
-    cd Integration-test/python && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -q && .venv/bin/pytest test_live_deployment.py -v
-```
-
-Run:
 ```bash
 make integ-test-python
 
@@ -320,19 +192,84 @@ make integ-test-python
 BASE_URL=https://your-app.ondigitalocean.app make integ-test-python
 ```
 
-Add `.venv` to `.gitignore`.
+> **venv required** — macOS Homebrew Python blocks system-wide `pip install` (PEP 668). The Makefile creates a venv automatically.
 
-> **Why venv?** macOS Homebrew Python enforces PEP 668 — `pip install` system-wide is blocked to protect the Homebrew Python installation. Always use a venv for project-level Python dependencies.
+> **Timestamp pitfall** — use `datetime.now(timezone.utc)` with `strftime('%Y-%m-%dT%H:%M:%SZ')`. Plain `datetime.now()` is local time and may be rejected by the server's UTC comparison.
 
-> **Timestamp pitfall**: Python `datetime.now()` uses local time; the server compares against its own `LocalDateTime.now()` (UTC on DO). A `timedelta(hours=2)` future timestamp may appear as past time to the server if your local timezone is behind UTC. Use `timedelta(days=1)` for future timestamp tests to safely clear any timezone offset.
+---
 
-### Verify DB persistence after tests
+## Step 9 — Monitoring and Alerts (DO App Platform) `[Operational Excellence]`
 
-```bash
-psql "postgres://<user>:<password>@<host>:<port>/<db>?sslmode=require"
-\dt                        -- should show your tables
-SELECT * FROM reports LIMIT 5;
+App Platform → your app → **Insights** (metrics) and **Alerts**.
+
+### Alert policies
+
+| Metric | Condition | Duration | Why |
+|--------|-----------|----------|-----|
+| **Restart Count** | above 1 | 1 min | Any restart = crash, OOM, or health check failure |
+| **Response Time (P95)** | above 1000ms | 5 mins | Tail latency degrading — DB slowness or GC pause. Healthy baseline is 50–200ms |
+| **CPU** | above 85% | 5 mins | Sustained high CPU means overloaded. Short spikes are normal for JVM |
+| **RAM** | above 85% | 10 mins | Growing without dropping = memory leak |
+
+Duration = how long condition must be true before alert fires. Too short → noisy. Too long → misses real incidents.
+
+### Health Checks
+
+Go to **App Platform → your app → component → Health Checks**. Add both Readiness and Liveness pointing at `/actuator/health`.
+
+- **TCP** — only checks if port is open. App could be returning 500s and TCP still passes.
+- **HTTP** — makes a real GET request. `/actuator/health` checks DB connectivity.
+
+| Field | Readiness | Liveness |
+|-------|-----------|----------|
+| Type | HTTP | HTTP |
+| Path | `/actuator/health` | `/actuator/health` |
+| Initial Delay | 30s | 60s |
+| Period | 10s | 10s |
+| Timeout | 5s | 5s |
+| Failure Threshold | 3 | 3 |
+
+> Initial Delay 0 triggers false failures during Spring Boot startup (~15–20s to initialize).
+
+---
+
+## Architecture & Decision Review (30 min)
+
+Don't follow the Notes step by step. Let the interviewer steer; go deep when they ask follow-up questions.
+
+### 1. Demo first (5 min)
+
+Start with the running system — not code.
+
 ```
+GET  /actuator/health              → DB status UP
+POST /api/v1/reports               → 201 + UUID
+GET  /api/v1/reports/{id}          → all fields
+GET  /api/v1/reports/summary       → avg/peak aggregation
+GET  /api/v1/reports/top-consumers → ranked results
+```
+
+### 2. Structure tour (3 min)
+
+> "Controller handles routing only. Service has all business logic. DAO is pure Spring Data. DTOs are records — immutable, no boilerplate. No logic leaks between layers."
+
+### 3. Key decisions (17 min)
+
+Name the decision and the tradeoff — let them ask for depth:
+
+- `OffsetDateTime` vs `LocalDateTime`
+- UUID PK vs auto-increment
+- Centralized `GlobalExceptionHandler`
+- Profile-based config (H2 local, PostgreSQL prod)
+- `@ModelAttribute` + `@BindParam` for query params
+
+### 4. Gaps and tradeoffs (5 min)
+
+- **`getTopConsumers` full table scan** — add time-range filter or pre-aggregated table at scale
+- **No authentication** — add API key or JWT at gateway level
+- **No pagination** — add cursor-based pagination on list endpoints
+- **`ddl-auto=update` in prod** — use Flyway for explicit versioned migrations in production
+- **Tests written after deploy** — deploy early in a time-boxed interview; infrastructure issues are unpredictable
 
 ---
 
@@ -340,12 +277,19 @@ SELECT * FROM reports LIMIT 5;
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| App uses H2 on DO | `SPRING_PROFILES_ACTIVE` not set or set to boolean `true` | Set value to string `prod` using the text field, not the toggle |
-| Connection refused to DB | App Platform not in DB Trusted Sources | Add app from dropdown in DB → Settings → Trusted Sources |
-| Tables not created | Wrong profile active — `create-drop` drops tables on shutdown | Ensure `prod` profile is active so `ddl-auto=update` loads |
-| `driver-class-name` conflict | H2 driver set explicitly in base properties but PostgreSQL URL injected | Remove `spring.datasource.driver-class-name` from `application.properties` |
-| Service throws `UnsupportedOperationException` | Try/catch swallowing `ValidationException` | Remove try/catch wrappers — let exceptions propagate to `GlobalExceptionHandler` |
-| CI never triggers | `.github/workflow/` directory (singular) is silently ignored | Rename to `.github/workflows/` (plural) |
-| Build fails: jar not found | Hardcoded jar name in Dockerfile doesn't match `settings.gradle` project name | Use `*.jar` wildcard in `COPY --from=builder` |
-| Timestamps stored/compared without timezone | `LocalDateTime` has no timezone — future-timestamp validation breaks when client and server are in different timezones | Use `OffsetDateTime` end-to-end (entity, all DTOs, DAO, service); maps to `timestamptz` in PostgreSQL |
-| `spring.jackson.serialization.write-dates-as-timestamps=false` fails to bind | Spring Boot 4.x uses Jackson 3, where `WRITE_DATES_AS_TIMESTAMPS` moved from `SerializationFeature` to `DateTimeFeature` | Use `spring.jackson.json.datetime.write-dates-as-timestamps=false` instead |
+| App uses H2 on DO | `SPRING_PROFILES_ACTIVE` not set or set to boolean `true` | Use the text field, not the toggle — sends `prod` not `true` |
+| Connection refused to DB | App not in DB Trusted Sources | Add app from dropdown in DB → Settings → Trusted Sources |
+| Tables not created | Wrong profile — `create-drop` drops tables on shutdown | Ensure `prod` profile is active so `ddl-auto=update` loads |
+| `driver-class-name` conflict | H2 driver set explicitly in base properties | Remove from `application.properties` — only set in prod profile |
+| CI never triggers | `.github/workflow/` (singular) silently ignored | Rename to `.github/workflows/` (plural) |
+| Build fails: jar not found | Hardcoded jar name in Dockerfile | Use `*.jar` wildcard in `COPY --from=builder` |
+| Timestamps break across timezones | `LocalDateTime` has no timezone | Use `OffsetDateTime` end-to-end → `timestamptz` in PostgreSQL |
+| Jackson datetime serialization fails | Spring Boot 4.x uses Jackson 3 — property path changed | Use `spring.jackson.json.datetime.write-dates-as-timestamps=false` |
+
+Future Improvements (for discussion)
+Authentication
+Pagination
+Caching
+Monitoring/alerts
+CI/CD
+Horizontal scaling
